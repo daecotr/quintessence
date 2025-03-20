@@ -1,13 +1,14 @@
 #include <concepts>
 #include <cstdlib>
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <ostream>
+#include <set>
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
-#include <functional>
-#include <memory>
 #include <vulkan/vulkan.hpp>
 
 namespace Q {
@@ -25,7 +26,7 @@ protected:
 
 private:
   struct Deleter {
-    void operator()(TClass *ptr) const { delete ptr; }
+    void operator()(const TClass *ptr) const { delete ptr; }
   };
 
   using UniqueTClass = std::unique_ptr<TClass, Deleter>;
@@ -88,8 +89,8 @@ concept AvailableProperties =
     };
 
 template <typename TAvailableProperties>
-void checkAvailable(const std::vector<const char *> &names,
-                    const TAvailableProperties &availableProperties) {
+bool isAvailable(const std::vector<const char *> &names,
+                 const TAvailableProperties &availableProperties) {
   for (const auto &name : names) {
     bool found = false;
     for (const auto &availableProperty : availableProperties) {
@@ -100,18 +101,25 @@ void checkAvailable(const std::vector<const char *> &names,
       }
     }
     if (!found)
-      throw std::runtime_error(
-          "Failed to find required instance layer/extension " +
-          std::string{name});
+      return false;
   }
+
+  return true;
 }
 
-void checkLayersAvailable(const std::vector<const char *> &names) {
-  checkAvailable(names, vk::enumerateInstanceLayerProperties());
+bool isInstanceLayersAvailable(const std::vector<const char *> &names) {
+  return isAvailable(names, vk::enumerateInstanceLayerProperties());
 }
 
-void checkExtensionsAvailable(const std::vector<const char *> &names) {
-  checkAvailable(names, vk::enumerateInstanceExtensionProperties());
+bool isInstanceExtensionsAvailable(const std::vector<const char *> &names) {
+  return isAvailable(names, vk::enumerateInstanceExtensionProperties());
+}
+
+bool isPhysicalDeviceExtensionsAvailable(
+    const vk::PhysicalDevice &physicalDevice,
+    const std::vector<const char *> &names) {
+  return isAvailable(names,
+                     physicalDevice.enumerateDeviceExtensionProperties());
 }
 
 void UniqueWindowDestroy(GLFWwindow *window) {
@@ -121,7 +129,8 @@ void UniqueWindowDestroy(GLFWwindow *window) {
 
 using UniqueWindow =
     std::unique_ptr<GLFWwindow, decltype(&UniqueWindowDestroy)>;
-UniqueWindow UniqueWindowCreate(int width, int height, const char *title = "") {
+UniqueWindow UniqueWindowCreate(const int width, const int height,
+                                const char *title = "") {
   GLFWwindow *rawWindow =
       glfwCreateWindow(width, height, title, nullptr, nullptr);
   if (!rawWindow)
@@ -130,33 +139,28 @@ UniqueWindow UniqueWindowCreate(int width, int height, const char *title = "") {
   return {rawWindow, UniqueWindowDestroy};
 };
 
-std::vector<const char *> getInstanceLayers() {
-  std::vector<const char *> instanceLayers = {"VK_LAYER_KHRONOS_validation"};
-  checkLayersAvailable(instanceLayers);
-  return instanceLayers;
-}
+std::vector<const char *> instanceLayers = {"VK_LAYER_KHRONOS_validation"};
+std::vector<const char *> instanceExtensions = {vk::EXTDebugUtilsExtensionName};
 
-std::vector<const char *> getInstanceExtensions() {
-  std::vector<const char *> instanceExtensions = {
-      vk::EXTDebugUtilsExtensionName};
-  checkExtensionsAvailable(instanceExtensions);
-
+void addGLFWRequiredInstanceExtensions() {
   uint32_t glfwInstanceExtensionCount = 0;
   const char **glfwInstanceExtensions =
       glfwGetRequiredInstanceExtensions(&glfwInstanceExtensionCount);
   instanceExtensions.insert(instanceExtensions.end(), glfwInstanceExtensions,
                             glfwInstanceExtensions +
                                 glfwInstanceExtensionCount);
-
-  return instanceExtensions;
 }
 
 vk::UniqueInstance createInstance() {
   vk::ApplicationInfo applicationInfo{"", 0, "", 0,
                                       vk::makeApiVersion(0, 1, 3, 296)};
 
-  std::vector<const char *> instanceLayers = getInstanceLayers(),
-                            instanceExtensions = getInstanceExtensions();
+  addGLFWRequiredInstanceExtensions();
+  if (!isInstanceLayersAvailable(instanceLayers))
+    throw std::runtime_error{"Not found instance layer"};
+
+  if (!isInstanceExtensionsAvailable(instanceExtensions))
+    throw std::runtime_error{"Not found instance extension"};
 
   const vk::InstanceCreateInfo instanceCreateInfo{
       vk::InstanceCreateFlags{},
@@ -170,7 +174,8 @@ vk::UniqueInstance createInstance() {
 }
 
 vk::UniqueHandle<vk::DebugUtilsMessengerEXT, vk::DispatchLoaderDynamic>
-createDebugUtilsMessenger(vk::UniqueInstance &instance,
+createDebugUtilsMessenger(
+    vk::UniqueInstance &instance,
     const vk::DispatchLoaderDynamic &dispatchLoaderDynamic) {
   constexpr vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfo{
       {},
@@ -186,6 +191,8 @@ createDebugUtilsMessenger(vk::UniqueInstance &instance,
          VkDebugUtilsMessageTypeFlagsEXT,
          const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData, void *)
           VKAPI_ATTR -> vk::Bool32 {
+            if (pCallbackData->pMessage == nullptr)
+              return vk::False;
             std::cout << pCallbackData->pMessage << std::endl;
             return vk::False;
           }};
@@ -193,17 +200,118 @@ createDebugUtilsMessenger(vk::UniqueInstance &instance,
   return instance->createDebugUtilsMessengerEXTUnique(
       debugUtilsMessengerCreateInfo, nullptr, dispatchLoaderDynamic);
 }
+
+const std::vector<const char *> deviceExtensions = {
+    vk::KHRSwapchainExtensionName};
+
+std::array<std::optional<uint32_t>, 2>
+getPhysicalDeviceQueueFamilyOptionalIndices(
+    const vk::PhysicalDevice &physicalDevice, const vk::SurfaceKHR &surface) {
+  std::optional<uint32_t> physicalDeviceQueueGraphicsFamily,
+      physicalDeviceQueuePresentFamily;
+  size_t i = 0;
+  auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+  for (const auto &queueFamily : physicalDevice.getQueueFamilyProperties()) {
+    if (queueFamily.queueCount > 0 &&
+        queueFamily.queueFlags & vk::QueueFlagBits::eGraphics)
+      physicalDeviceQueueGraphicsFamily = i;
+    if (queueFamily.queueCount > 0 &&
+        physicalDevice.getSurfaceSupportKHR(i, surface))
+      physicalDeviceQueuePresentFamily = i;
+    if (physicalDeviceQueueGraphicsFamily.has_value() &&
+        physicalDeviceQueuePresentFamily.has_value())
+      break;
+    ++i;
+  }
+
+  return {physicalDeviceQueueGraphicsFamily, physicalDeviceQueuePresentFamily};
+}
+
+bool getPhysicalDeviceQueueFamilySupport(
+    const vk::PhysicalDevice &physicalDevice, const vk::SurfaceKHR &surface) {
+  const auto indices =
+      getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice, surface);
+  return indices[0].has_value() && indices[1].has_value();
+}
+
+std::set<uint32_t>
+getPhysicalDeviceQueueFamilyIndices(const vk::PhysicalDevice &physicalDevice,
+                                    const vk::SurfaceKHR &surface) {
+  auto physicalDeviceQueueFamilyOptionalIndices =
+      getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice, surface);
+
+  return {physicalDeviceQueueFamilyOptionalIndices[0].value(),
+          physicalDeviceQueueFamilyOptionalIndices[1].value()};
+}
+
+bool isSuitablePhysicalDevice(const vk::PhysicalDevice &physicalDevice,
+                              const vk::SurfaceKHR &surface) {
+  return getPhysicalDeviceQueueFamilySupport(physicalDevice, surface) &&
+         isPhysicalDeviceExtensionsAvailable(physicalDevice,
+                                             deviceExtensions) &&
+         !physicalDevice.getSurfaceFormatsKHR(surface).empty() &&
+         !physicalDevice.getSurfacePresentModesKHR(surface).empty();
+}
+
+vk::PhysicalDevice pickPhysicalDevice(vk::UniqueInstance &instance,
+                                      const vk::SurfaceKHR &surface) {
+  const auto availablePhysicalDevices = instance->enumeratePhysicalDevices();
+  if (availablePhysicalDevices.empty())
+    throw std::runtime_error("Failed to enumerate physical devices");
+
+  vk::PhysicalDevice physicalDevice;
+  for (const auto &availablePhysicalDevice : availablePhysicalDevices) {
+    if (isSuitablePhysicalDevice(availablePhysicalDevice, surface)) {
+      physicalDevice = availablePhysicalDevice;
+      break;
+    }
+  }
+
+  if (!physicalDevice)
+    throw std::runtime_error("No suitable physical devices");
+  return physicalDevice;
+}
+
+vk::UniqueDevice createDevice(const vk::PhysicalDevice &physicalDevice,
+                              const vk::SurfaceKHR &surface) {
+  std::vector<vk::DeviceQueueCreateInfo> deviceQueueCreateInfos;
+  const std::set<uint32_t> physicalDeviceQueueFamilies =
+      getPhysicalDeviceQueueFamilyIndices(physicalDevice, surface);
+
+  float queuePriority = 1.0f;
+  deviceQueueCreateInfos.reserve(physicalDeviceQueueFamilies.size());
+  for (const auto &physicalDeviceQueueFamily : physicalDeviceQueueFamilies) {
+    deviceQueueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{},
+                                        physicalDeviceQueueFamily, 1,
+                                        &queuePriority);
+  }
+
+  vk::PhysicalDeviceFeatures physicalDeviceFeatures{};
+  const vk::DeviceCreateInfo deviceCreateInfo{
+      vk::DeviceCreateFlags{},
+      static_cast<uint32_t>(deviceQueueCreateInfos.size()),
+      deviceQueueCreateInfos.data(),
+      static_cast<uint32_t>(instanceLayers.size()),
+      instanceLayers.data(),
+      static_cast<uint32_t>(deviceExtensions.size()),
+      deviceExtensions.data(),
+      &physicalDeviceFeatures};
+
+  return physicalDevice.createDeviceUnique(deviceCreateInfo);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
   try {
     Q::WindowManager::getInstance();
-    Q::UniqueWindow window{Q::UniqueWindowCreate(512, 512)};
+    auto window{Q::UniqueWindowCreate(512, 512)};
 
     auto instance = Q::createInstance();
-    const vk::DispatchLoaderDynamic dispatchLoaderDynamic{*instance,
-                                                      vkGetInstanceProcAddr};
-    auto debugUtilsMessenger = Q::createDebugUtilsMessenger(instance, dispatchLoaderDynamic);
+    const vk::DispatchLoaderDynamic dispatchLoaderDynamic{
+        *instance, vkGetInstanceProcAddr};
+    auto debugUtilsMessenger =
+        Q::createDebugUtilsMessenger(instance, dispatchLoaderDynamic);
 
     auto UniqueSurfaceDestroy =
         [&instance](const vk::SurfaceKHR *surfaceBeingDestroyed) {
@@ -227,20 +335,19 @@ int main(int argc, char **argv) {
       return UniqueSurface{surface, UniqueSurfaceDestroy};
     };
 
-    UniqueSurface surface{UniqueSurfaceCreate()};
+    const auto surface{UniqueSurfaceCreate()};
 
-    const auto availableDevices = instance->enumeratePhysicalDevices();
-    if (availableDevices.empty())
-      throw std::runtime_error("Failed to enumerate physical devices");
-
-    const std::vector<const char *> deviceExtensions = {
-        vk::KHRSwapchainExtensionName};
+    const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
+    auto device = Q::createDevice(physicalDevice, *surface.get());
 
     glfwPollEvents();
 
   } catch (const std::exception &exception) {
     std::cerr << exception.what() << std::endl;
     return EXIT_FAILURE;
+  } catch (...) {
+    std::cerr << "Unknown exception" << std::endl;
   }
+
   return EXIT_SUCCESS;
 }
