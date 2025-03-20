@@ -575,8 +575,7 @@ std::vector<vk::UniqueFramebuffer> createFramebuffers(
     vk::UniqueDevice &device, std::vector<vk::UniqueImageView> &imageViews,
     vk::UniqueRenderPass &renderPass, const vk::Extent2D &swapchainExtent) {
   std::vector<vk::UniqueFramebuffer> swapchainFramebuffers;
-  swapchainFramebuffers.resize(imageViews.size());
-
+  swapchainFramebuffers.reserve(imageViews.size());
   for (auto &imageView : imageViews) {
     vk::ImageView attachments[] = {*imageView};
     vk::FramebufferCreateInfo framebufferCreateInfo{
@@ -603,6 +602,40 @@ createCommandPool(vk::UniqueDevice &device,
   const vk::CommandPoolCreateInfo commandPoolCreateInfo{
       vk::CommandPoolCreateFlags{}, queueFamilyOptionalIndices[0].value()};
   return device->createCommandPoolUnique(commandPoolCreateInfo);
+}
+
+std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
+    vk::UniqueDevice &device,
+    const std::vector<vk::UniqueFramebuffer> &framebuffers,
+    vk::UniqueCommandPool &commandPool, vk::UniqueRenderPass &renderPass,
+    const vk::Extent2D &swapchainExtent, vk::UniquePipeline &graphicsPipeline) {
+  std::vector<vk::UniqueCommandBuffer> commandBuffers;
+  commandBuffers.resize(framebuffers.size());
+  const vk::CommandBufferAllocateInfo commandBufferAllocateInfo{
+      *commandPool, vk::CommandBufferLevel::ePrimary,
+      static_cast<uint32_t>(framebuffers.size())};
+  commandBuffers =
+      device->allocateCommandBuffersUnique(commandBufferAllocateInfo);
+
+  for (uint32_t i = 0; i < commandBuffers.size(); i++) {
+    vk::CommandBufferBeginInfo commandBufferBeginInfo{
+        vk::CommandBufferUsageFlagBits::eSimultaneousUse};
+
+    commandBuffers[i]->begin(commandBufferBeginInfo);
+
+    vk::ClearValue clearColor{std::array<float, 4>{0, 0, 0, 0}};
+    vk::RenderPassBeginInfo renderPassBeginInfo{*renderPass, *framebuffers[i], vk::Rect2D{vk::Offset2D{0, 0}, swapchainExtent}, 1, &clearColor};
+
+    commandBuffers[i]->beginRenderPass(renderPassBeginInfo,
+                                       vk::SubpassContents::eInline);
+    commandBuffers[i]->bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                    *graphicsPipeline);
+    commandBuffers[i]->draw(3, 1, 0, 0);
+    commandBuffers[i]->endRenderPass();
+    commandBuffers[i]->end();
+  }
+
+  return std::move(commandBuffers);
 }
 
 } // namespace Q
@@ -658,7 +691,11 @@ int main(int argc, char **argv) {
         device, renderPass, pipelineLayout, swapchainSurfaceExtent);
     auto framebuffers = Q::createFramebuffers(
         device, swapchainImageViews, renderPass, swapchainSurfaceExtent);
-    auto commandPool = Q::createCommandPool(device, physicalDevice, *surface.get());
+    auto commandPool =
+        Q::createCommandPool(device, physicalDevice, *surface.get());
+    auto commandBuffers =
+        Q::createCommandBuffers(device, framebuffers, commandPool, renderPass,
+                                swapchainSurfaceExtent, graphicsPipeline);
 
     glfwPollEvents();
   } catch (const std::exception &exception) {
