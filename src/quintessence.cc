@@ -59,7 +59,6 @@ protected:
     if (!glfwInit())
       throw std::runtime_error("Failed to initialize `WindowManager`");
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
     std::cout << "WindowManager initialized" << std::endl;
   }
@@ -331,13 +330,15 @@ selectSurfacePresentMode(std::vector<vk::PresentModeKHR> &presentModes) {
 }
 
 vk::Extent2D
-selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities) {
+selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities, GLFWwindow* rawWindow) {
   if (surfaceCapabilities.currentExtent.width !=
       std::numeric_limits<uint32_t>::max())
     return surfaceCapabilities.currentExtent;
   else {
-    vk::Extent2D actualExtent = {static_cast<uint32_t>(512),
-                                 static_cast<uint32_t>(512)};
+    int width, height;
+    glfwGetFramebufferSize(rawWindow, &width, &height);
+    vk::Extent2D actualExtent = {static_cast<uint32_t>(width),
+                                 static_cast<uint32_t>(height)};
 
     actualExtent.width = std::max(
         surfaceCapabilities.minImageExtent.width,
@@ -359,13 +360,13 @@ vk::SurfaceFormatKHR getSurfaceFormat(const vk::PhysicalDevice &physicalDevice,
 
 vk::UniqueSwapchainKHR createSwapchain(vk::UniqueDevice &device,
                                        const vk::PhysicalDevice physicalDevice,
-                                       const vk::SurfaceKHR &surface) {
+                                       const vk::SurfaceKHR &surface, GLFWwindow* rawWindow) {
   const auto surfaceFormat = getSurfaceFormat(physicalDevice, surface);
   auto surfacePresentModes = physicalDevice.getSurfacePresentModesKHR(surface);
   const auto surfacePresentMode = selectSurfacePresentMode(surfacePresentModes);
   const auto surfaceCapabilities =
       physicalDevice.getSurfaceCapabilitiesKHR(surface);
-  const auto surfaceExtent = selectSurfaceExtent(surfaceCapabilities);
+  const auto surfaceExtent = selectSurfaceExtent(surfaceCapabilities, rawWindow);
 
   auto minImageCount = surfaceCapabilities.minImageCount + 1;
   if (surfaceCapabilities.maxImageCount > 0 &&
@@ -640,12 +641,51 @@ std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
   return std::move(commandBuffers);
 }
 
+void recreateSwapchain(vk::UniqueDevice &device, GLFWwindow *window,
+                       vk::UniqueSwapchainKHR &swapchain,
+                       std::vector<vk::UniqueImageView> &imageViews,
+                       std::vector<vk::UniqueFramebuffer> &framebuffers,
+                       const vk::PhysicalDevice &physicalDevice,
+                       const vk::SurfaceKHR &surface,
+                       std::vector<vk::Image> &swapchainImages,
+                       const vk::Format &swapchainSurfaceFormat,
+                       vk::UniqueRenderPass &renderPass,
+                       const vk::Extent2D &swapchainExtent,
+                       std::vector<vk::UniqueCommandBuffer> &commandBuffers,
+                       vk::UniqueCommandPool &commandPool,
+                       vk::Extent2D swapchainSurfaceExtent,
+                       vk::UniquePipeline &graphicsPipeline) {
+  int width = 0, height = 0;
+  while (width == 0 || height == 0) {
+    glfwGetWindowSize(window, &width, &height);
+    glfwWaitEvents();
+  }
+
+  device->waitIdle();
+  swapchainSurfaceExtent = selectSurfaceExtent(
+        physicalDevice.getSurfaceCapabilitiesKHR(surface), window);
+  swapchain.reset();
+  swapchain = createSwapchain(device, physicalDevice, surface, window);
+  swapchainImages.clear();
+  swapchainImages = device->getSwapchainImagesKHR(*swapchain);
+  imageViews.clear();
+  imageViews =
+      getSwapchainImageViews(device, swapchainImages, swapchainSurfaceFormat);
+  framebuffers.clear();
+  framebuffers =
+      createFramebuffers(device, imageViews, renderPass, swapchainExtent);
+  commandBuffers.clear();
+  commandBuffers =
+      Q::createCommandBuffers(device, framebuffers, commandPool, renderPass,
+                              swapchainSurfaceExtent, graphicsPipeline);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
   try {
     Q::WindowManager::getInstance();
-    auto window{Q::UniqueWindowCreate(512, 512)};
+    auto window{Q::UniqueWindowCreate(64, 64)};
 
     auto instance = Q::createInstance();
     const vk::DispatchLoaderDynamic dispatchLoaderDynamic{
@@ -679,12 +719,12 @@ int main(int argc, char **argv) {
 
     const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
     auto device = Q::createDevice(physicalDevice, *surface.get());
-    auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get());
-    const auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
+    auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get(), window.get());
+    auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
     const auto swapchainSurfaceFormat =
         Q::getSurfaceFormat(physicalDevice, *surface.get()).format;
     auto swapchainSurfaceExtent = Q::selectSurfaceExtent(
-        physicalDevice.getSurfaceCapabilitiesKHR(*surface.get()));
+        physicalDevice.getSurfaceCapabilitiesKHR(*surface.get()), window.get());
     auto swapchainImageViews = Q::getSwapchainImageViews(
         device, swapchainImages, swapchainSurfaceFormat);
     auto renderPass = Q::createRenderPass(device, swapchainSurfaceFormat);
@@ -718,8 +758,16 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < maxFramesInFlight; ++i) {
       imageAvailableSemaphores.emplace_back(device->createSemaphoreUnique({}));
       renderFinishedSemaphores.emplace_back(device->createSemaphoreUnique({}));
-      inFlightFences.emplace_back(device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled}));
+      inFlightFences.emplace_back(
+          device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled}));
     }
+
+    bool framebufferResized = false;
+    glfwSetWindowUserPointer(window.get(), &framebufferResized);
+    glfwSetFramebufferSizeCallback(
+        window.get(), [](GLFWwindow *rawWindow, int, int) {
+          *static_cast<bool *>(glfwGetWindowUserPointer(rawWindow)) = true;
+        });
 
     uint32_t currentFrame = 0;
     vk::Result result;
@@ -728,30 +776,41 @@ int main(int argc, char **argv) {
       result =
           device->waitForFences(1, &*inFlightFences[currentFrame], vk::True,
                                 std::numeric_limits<uint64_t>::max());
-       result = device->resetFences(1, &*inFlightFences[currentFrame]);
-       uint32_t imageIndex =
-           device
-               ->acquireNextImageKHR(
-                   *swapchain, std::numeric_limits<uint64_t>::max(),
-                   *imageAvailableSemaphores[currentFrame], nullptr)
-               .value;
+      result = device->resetFences(1, &*inFlightFences[currentFrame]);
+      uint32_t imageIndex =
+          device
+              ->acquireNextImageKHR(
+                  *swapchain, std::numeric_limits<uint64_t>::max(),
+                  *imageAvailableSemaphores[currentFrame], nullptr)
+              .value;
 
-       vk::Semaphore waitSemaphores[] = {
-           *imageAvailableSemaphores[currentFrame]};
-       vk::PipelineStageFlags waitStages[] = {
-           vk::PipelineStageFlagBits::eColorAttachmentOutput};
-       vk::Semaphore signalSemaphores[] = {
-           *renderFinishedSemaphores[currentFrame]};
-       vk::SubmitInfo submitInfo{
-           1, waitSemaphores,  waitStages, 1, &*commandBuffers[imageIndex],
-           1, signalSemaphores};
-       graphicsQueue.submit(submitInfo, *inFlightFences[currentFrame]);
+      vk::Semaphore waitSemaphores[] = {
+          *imageAvailableSemaphores[currentFrame]};
+      vk::PipelineStageFlags waitStages[] = {
+          vk::PipelineStageFlagBits::eColorAttachmentOutput};
+      vk::Semaphore signalSemaphores[] = {
+          *renderFinishedSemaphores[currentFrame]};
+      vk::SubmitInfo submitInfo{
+          1, waitSemaphores,  waitStages, 1, &*commandBuffers[imageIndex],
+          1, signalSemaphores};
+      graphicsQueue.submit(submitInfo, *inFlightFences[currentFrame]);
 
-       vk::SwapchainKHR swapchains[] = {*swapchain};
-       vk::PresentInfoKHR presentInfo{1,          signalSemaphores, 1,
-                                      swapchains, &imageIndex,      &result};
-       result = presentQueue.presentKHR(presentInfo);
-       currentFrame = (currentFrame + 1) % maxFramesInFlight;
+      vk::SwapchainKHR swapchains[] = {*swapchain};
+      vk::PresentInfoKHR presentInfo{1,          signalSemaphores, 1,
+                                     swapchains, &imageIndex,      &result};
+      result = presentQueue.presentKHR(presentInfo);
+      if (result == vk::Result::eErrorOutOfDateKHR ||
+          result == vk::Result::eSuboptimalKHR || framebufferResized) {
+        framebufferResized = false;
+        Q::recreateSwapchain(
+            device, window.get(), swapchain, swapchainImageViews, framebuffers,
+            physicalDevice, *surface.get(), swapchainImages,
+            swapchainSurfaceFormat, renderPass, swapchainSurfaceExtent,
+            commandBuffers, commandPool, swapchainSurfaceExtent,
+            graphicsPipeline);
+      }
+
+      currentFrame = (currentFrame + 1) % maxFramesInFlight;
     }
 
     device->waitIdle();
