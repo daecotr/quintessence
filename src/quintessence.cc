@@ -350,11 +350,16 @@ selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities) {
   }
 }
 
+vk::SurfaceFormatKHR getSurfaceFormat(const vk::PhysicalDevice &physicalDevice,
+                                      const vk::SurfaceKHR &surface) {
+  auto surfaceFormats = physicalDevice.getSurfaceFormatsKHR(surface);
+  return selectSurfaceFormat(surfaceFormats);
+}
+
 vk::UniqueSwapchainKHR createSwapchain(vk::UniqueDevice &device,
                                        const vk::PhysicalDevice physicalDevice,
                                        const vk::SurfaceKHR &surface) {
-  auto surfaceFormats = physicalDevice.getSurfaceFormatsKHR(surface);
-  const auto surfaceFormat = selectSurfaceFormat(surfaceFormats);
+  const auto surfaceFormat = getSurfaceFormat(physicalDevice, surface);
   auto surfacePresentModes = physicalDevice.getSurfacePresentModesKHR(surface);
   const auto surfacePresentMode = selectSurfacePresentMode(surfacePresentModes);
   const auto surfaceCapabilities =
@@ -401,6 +406,28 @@ vk::UniqueSwapchainKHR createSwapchain(vk::UniqueDevice &device,
   return device->createSwapchainKHRUnique(swapchainCreateInfo);
 }
 
+std::vector<vk::UniqueImageView>
+getSwapchainImageViews(const vk::UniqueDevice &device,
+                       const std::vector<vk::Image> &swapchainImages,
+                       const vk::Format &swapchainSurfaceFormat) {
+  std::vector<vk::UniqueImageView> swapchainImageViews;
+  swapchainImageViews.reserve(swapchainImages.size());
+
+  for (const auto &swapchainImage : swapchainImages) {
+    vk::ImageViewCreateInfo imageViewCreateInfo{
+        vk::ImageViewCreateFlags{},
+        swapchainImage,
+        vk::ImageViewType::e2D,
+        swapchainSurfaceFormat,
+        vk::ComponentMapping{},
+        vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+    swapchainImageViews.emplace_back(
+        device->createImageViewUnique(imageViewCreateInfo));
+  }
+
+  return std::move(swapchainImageViews);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
@@ -441,9 +468,15 @@ int main(int argc, char **argv) {
     const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
     auto device = Q::createDevice(physicalDevice, *surface.get());
     auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get());
+    auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
+    const auto swapchainSurfaceFormat =
+        Q::getSurfaceFormat(physicalDevice, *surface.get()).format;
+    const auto swapchainSurfaceExtent = Q::selectSurfaceExtent(
+        physicalDevice.getSurfaceCapabilitiesKHR(*surface.get()));
+    auto swapchainImageViews = Q::getSwapchainImageViews(
+        device, swapchainImages, swapchainSurfaceFormat);
 
     glfwPollEvents();
-
   } catch (const std::exception &exception) {
     std::cerr << exception.what() << std::endl;
     return EXIT_FAILURE;
