@@ -594,6 +594,17 @@ std::vector<vk::UniqueFramebuffer> createFramebuffers(
   return std::move(swapchainFramebuffers);
 }
 
+vk::UniqueCommandPool
+createCommandPool(vk::UniqueDevice &device,
+                  const vk::PhysicalDevice &physicalDevice,
+                  const vk::SurfaceKHR &surface) {
+  const auto queueFamilyOptionalIndices =
+      getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice, surface);
+  const vk::CommandPoolCreateInfo commandPoolCreateInfo{
+      vk::CommandPoolCreateFlags{}, queueFamilyOptionalIndices[0].value()};
+  return device->createCommandPoolUnique(commandPoolCreateInfo);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
@@ -647,6 +658,7 @@ int main(int argc, char **argv) {
         device, renderPass, pipelineLayout, swapchainSurfaceExtent);
     auto framebuffers = Q::createFramebuffers(
         device, swapchainImageViews, renderPass, swapchainSurfaceExtent);
+    auto commandPool = Q::createCommandPool(device, physicalDevice, *surface.get());
 
     glfwPollEvents();
   } catch (const std::exception &exception) {
