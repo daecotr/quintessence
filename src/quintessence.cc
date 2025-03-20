@@ -428,6 +428,38 @@ getSwapchainImageViews(const vk::UniqueDevice &device,
   return std::move(swapchainImageViews);
 }
 
+vk::UniqueRenderPass createRenderPass(const vk::UniqueDevice &device,
+                                      const vk::Format swapchainImageFormat) {
+  vk::AttachmentDescription attachmentDescriptions{
+      vk::AttachmentDescriptionFlags{}, swapchainImageFormat,
+      vk::SampleCountFlagBits::e1,      vk::AttachmentLoadOp::eClear,
+      vk::AttachmentStoreOp::eStore,    vk::AttachmentLoadOp::eDontCare,
+      vk::AttachmentStoreOp::eDontCare, vk::ImageLayout::eUndefined,
+      vk::ImageLayout::ePresentSrcKHR};
+
+  vk::AttachmentReference attachmentReference{
+      0, vk::ImageLayout::eColorAttachmentOptimal};
+
+  vk::SubpassDescription subpassDescription{vk::SubpassDescriptionFlags{},
+                                            vk::PipelineBindPoint::eGraphics, 1,
+                                            &attachmentReference};
+
+  vk::SubpassDependency subpassDependency{
+      vk::SubpassExternal,
+      0,
+      vk::PipelineStageFlagBits::eColorAttachmentOutput,
+      vk::PipelineStageFlagBits::eColorAttachmentOutput,
+      vk::AccessFlags{},
+      vk::AccessFlagBits::eColorAttachmentRead |
+          vk::AccessFlagBits::eColorAttachmentWrite};
+
+  const vk::RenderPassCreateInfo renderPassCreateInfo{
+      vk::RenderPassCreateFlags{}, 1, &attachmentDescriptions, 1,
+      &subpassDescription,         1, &subpassDependency};
+
+  return device->createRenderPassUnique(renderPassCreateInfo);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
@@ -475,6 +507,7 @@ int main(int argc, char **argv) {
         physicalDevice.getSurfaceCapabilitiesKHR(*surface.get()));
     auto swapchainImageViews = Q::getSwapchainImageViews(
         device, swapchainImages, swapchainSurfaceFormat);
+    auto renderPass = Q::createRenderPass(device, swapchainSurfaceFormat);
 
     glfwPollEvents();
   } catch (const std::exception &exception) {
