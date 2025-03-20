@@ -10,6 +10,7 @@
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 #include <vulkan/vulkan.hpp>
 
 namespace Q {
@@ -200,6 +201,24 @@ createDebugUtilsMessenger(
       debugUtilsMessengerCreateInfo, nullptr, dispatchLoaderDynamic);
 }
 
+struct Vertex {
+  glm::vec3 position;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription getBindingDescription() {
+    return vk::VertexInputBindingDescription{0, sizeof(Vertex),
+                                             vk::VertexInputRate::eVertex};
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2>
+  getAttributeDescriptions() {
+    return {vk::VertexInputAttributeDescription{
+                0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, position)},
+            vk::VertexInputAttributeDescription{
+                1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)}};
+  }
+};
+
 const std::vector<const char *> deviceExtensions = {
     vk::KHRSwapchainExtensionName};
 
@@ -277,7 +296,7 @@ vk::UniqueDevice createDevice(const vk::PhysicalDevice &physicalDevice,
   const std::set<uint32_t> physicalDeviceQueueFamilies =
       getPhysicalDeviceQueueFamilyIndices(physicalDevice, surface);
 
-  float queuePriority = 1.0f;
+  float queuePriority = 1;
   deviceQueueCreateInfos.reserve(physicalDeviceQueueFamilies.size());
   for (const auto &physicalDeviceQueueFamily : physicalDeviceQueueFamilies) {
     deviceQueueCreateInfos.emplace_back(vk::DeviceQueueCreateFlags{},
@@ -330,7 +349,8 @@ selectSurfacePresentMode(std::vector<vk::PresentModeKHR> &presentModes) {
 }
 
 vk::Extent2D
-selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities, GLFWwindow* rawWindow) {
+selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities,
+                    GLFWwindow *rawWindow) {
   if (surfaceCapabilities.currentExtent.width !=
       std::numeric_limits<uint32_t>::max())
     return surfaceCapabilities.currentExtent;
@@ -360,13 +380,15 @@ vk::SurfaceFormatKHR getSurfaceFormat(const vk::PhysicalDevice &physicalDevice,
 
 vk::UniqueSwapchainKHR createSwapchain(vk::UniqueDevice &device,
                                        const vk::PhysicalDevice physicalDevice,
-                                       const vk::SurfaceKHR &surface, GLFWwindow* rawWindow) {
+                                       const vk::SurfaceKHR &surface,
+                                       GLFWwindow *rawWindow) {
   const auto surfaceFormat = getSurfaceFormat(physicalDevice, surface);
   auto surfacePresentModes = physicalDevice.getSurfacePresentModesKHR(surface);
   const auto surfacePresentMode = selectSurfacePresentMode(surfacePresentModes);
   const auto surfaceCapabilities =
       physicalDevice.getSurfaceCapabilitiesKHR(surface);
-  const auto surfaceExtent = selectSurfaceExtent(surfaceCapabilities, rawWindow);
+  const auto surfaceExtent =
+      selectSurfaceExtent(surfaceCapabilities, rawWindow);
 
   auto minImageCount = surfaceCapabilities.minImageCount + 1;
   if (surfaceCapabilities.maxImageCount > 0 &&
@@ -503,8 +525,11 @@ vk::UniquePipeline createGraphicsPipeline(
        *vertexShaderModule, "main"},
       {vk::PipelineShaderStageCreateFlags{}, vk::ShaderStageFlagBits::eFragment,
        *fragmentShaderModule, "main"}};
+  auto bindingDescription = Vertex::getBindingDescription();
+  auto attributeDescriptions = Vertex::getAttributeDescriptions();
   vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo{
-      vk::PipelineVertexInputStateCreateFlags{}, 0, nullptr, 0, nullptr};
+      vk::PipelineVertexInputStateCreateFlags{}, 1, &bindingDescription,
+      attributeDescriptions.size(), attributeDescriptions.data()};
   vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo{
       vk::PipelineInputAssemblyStateCreateFlags{},
       vk::PrimitiveTopology::eTriangleList, vk::False};
@@ -609,7 +634,8 @@ std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
     vk::UniqueDevice &device,
     const std::vector<vk::UniqueFramebuffer> &framebuffers,
     vk::UniqueCommandPool &commandPool, vk::UniqueRenderPass &renderPass,
-    const vk::Extent2D &swapchainExtent, vk::UniquePipeline &graphicsPipeline) {
+    const vk::Extent2D &swapchainExtent, vk::UniquePipeline &graphicsPipeline,
+    vk::UniqueBuffer &vertexBuffer) {
   std::vector<vk::UniqueCommandBuffer> commandBuffers;
   commandBuffers.resize(framebuffers.size());
   const vk::CommandBufferAllocateInfo commandBufferAllocateInfo{
@@ -633,6 +659,9 @@ std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
                                        vk::SubpassContents::eInline);
     commandBuffers[i]->bindPipeline(vk::PipelineBindPoint::eGraphics,
                                     *graphicsPipeline);
+    const vk::Buffer vertexBuffers[] = {*vertexBuffer};
+    constexpr vk::DeviceSize offsets[] = {0};
+    commandBuffers[i]->bindVertexBuffers(0, 1, vertexBuffers, offsets);
     commandBuffers[i]->draw(3, 1, 0, 0);
     commandBuffers[i]->endRenderPass();
     commandBuffers[i]->end();
@@ -641,20 +670,18 @@ std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
   return std::move(commandBuffers);
 }
 
-void recreateSwapchain(vk::UniqueDevice &device, GLFWwindow *window,
-                       vk::UniqueSwapchainKHR &swapchain,
-                       std::vector<vk::UniqueImageView> &imageViews,
-                       std::vector<vk::UniqueFramebuffer> &framebuffers,
-                       const vk::PhysicalDevice &physicalDevice,
-                       const vk::SurfaceKHR &surface,
-                       std::vector<vk::Image> &swapchainImages,
-                       const vk::Format &swapchainSurfaceFormat,
-                       vk::UniqueRenderPass &renderPass,
-                       const vk::Extent2D &swapchainExtent,
-                       std::vector<vk::UniqueCommandBuffer> &commandBuffers,
-                       vk::UniqueCommandPool &commandPool,
-                       vk::Extent2D swapchainSurfaceExtent,
-                       vk::UniquePipeline &graphicsPipeline) {
+void recreateSwapchain(
+    vk::UniqueDevice &device, GLFWwindow *window,
+    vk::UniqueSwapchainKHR &swapchain,
+    std::vector<vk::UniqueImageView> &imageViews,
+    std::vector<vk::UniqueFramebuffer> &framebuffers,
+    const vk::PhysicalDevice &physicalDevice, const vk::SurfaceKHR &surface,
+    std::vector<vk::Image> &swapchainImages,
+    const vk::Format &swapchainSurfaceFormat, vk::UniqueRenderPass &renderPass,
+    const vk::Extent2D &swapchainExtent,
+    std::vector<vk::UniqueCommandBuffer> &commandBuffers,
+    vk::UniqueCommandPool &commandPool, vk::Extent2D &swapchainSurfaceExtent,
+    vk::UniquePipeline &graphicsPipeline, vk::UniqueBuffer &vertexBuffer) {
   int width = 0, height = 0;
   while (width == 0 || height == 0) {
     glfwGetWindowSize(window, &width, &height);
@@ -663,7 +690,7 @@ void recreateSwapchain(vk::UniqueDevice &device, GLFWwindow *window,
 
   device->waitIdle();
   swapchainSurfaceExtent = selectSurfaceExtent(
-        physicalDevice.getSurfaceCapabilitiesKHR(surface), window);
+      physicalDevice.getSurfaceCapabilitiesKHR(surface), window);
   swapchain.reset();
   swapchain = createSwapchain(device, physicalDevice, surface, window);
   swapchainImages.clear();
@@ -675,9 +702,61 @@ void recreateSwapchain(vk::UniqueDevice &device, GLFWwindow *window,
   framebuffers =
       createFramebuffers(device, imageViews, renderPass, swapchainExtent);
   commandBuffers.clear();
-  commandBuffers =
-      Q::createCommandBuffers(device, framebuffers, commandPool, renderPass,
-                              swapchainSurfaceExtent, graphicsPipeline);
+  commandBuffers = Q::createCommandBuffers(device, framebuffers, commandPool,
+                                           renderPass, swapchainSurfaceExtent,
+                                           graphicsPipeline, vertexBuffer);
+}
+
+const std::vector<Vertex> vertices = {{{0, -0.5, 0}, {0, 1, 1}},
+                                      {{0.5, 0.5, 0}, {1, 0, 1}},
+                                      {{-0.5f, 0.5, 0}, {1, 1, 0}}};
+
+uint32_t findMemoryType(const vk::PhysicalDevice &physicalDevice,
+                        const uint32_t typeFilter,
+                        const vk::MemoryPropertyFlags properties) {
+  const vk::PhysicalDeviceMemoryProperties memoryProperties =
+      physicalDevice.getMemoryProperties();
+
+  for (size_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+    if ((typeFilter & (1 << i)) &&
+        (memoryProperties.memoryTypes[i].propertyFlags & properties) ==
+            properties) {
+      return i;
+    }
+  }
+
+  throw std::runtime_error("Failed to find suitable memory type");
+}
+
+vk::UniqueBuffer createVertexBuffer(vk::UniqueDevice &device) {
+  const vk::BufferCreateInfo vertexBufferCreateInfo{
+      vk::BufferCreateFlags{}, sizeof(vertices[0]) * vertices.size(),
+      vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive};
+  return device->createBufferUnique(vertexBufferCreateInfo);
+}
+
+void allocateVertexBufferMemory(vk::UniqueDevice &device,
+                                vk::UniqueDeviceMemory &vertexBufferMemory,
+                                vk::UniqueBuffer &vertexBuffer) {
+  device->bindBufferMemory(vertexBuffer.get(), *vertexBufferMemory, 0);
+  void *data = device->mapMemory(*vertexBufferMemory, 0,
+                                 sizeof(vertices[0]) * vertices.size());
+  std::memcpy(data, vertices.data(), sizeof(vertices[0]) * vertices.size());
+  device->unmapMemory(*vertexBufferMemory);
+}
+
+vk::UniqueDeviceMemory
+getVertexBufferMemory(vk::UniqueDevice &device,
+                      const vk::PhysicalDevice &physicalDevice,
+                      vk::UniqueBuffer &vertexBuffer) {
+  const auto memoryRequirements =
+      device->getBufferMemoryRequirements(vertexBuffer.get());
+  const vk::MemoryAllocateInfo memoryAllocateInfo{
+      memoryRequirements.size,
+      findMemoryType(physicalDevice, memoryRequirements.memoryTypeBits,
+                     vk::MemoryPropertyFlagBits::eHostVisible |
+                         vk::MemoryPropertyFlagBits::eHostCoherent)};
+  return device->allocateMemoryUnique(memoryAllocateInfo);
 }
 
 } // namespace Q
@@ -719,7 +798,8 @@ int main(int argc, char **argv) {
 
     const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
     auto device = Q::createDevice(physicalDevice, *surface.get());
-    auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get(), window.get());
+    auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get(),
+                                        window.get());
     auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
     const auto swapchainSurfaceFormat =
         Q::getSurfaceFormat(physicalDevice, *surface.get()).format;
@@ -735,9 +815,12 @@ int main(int argc, char **argv) {
         device, swapchainImageViews, renderPass, swapchainSurfaceExtent);
     auto commandPool =
         Q::createCommandPool(device, physicalDevice, *surface.get());
-    auto commandBuffers =
-        Q::createCommandBuffers(device, framebuffers, commandPool, renderPass,
-                                swapchainSurfaceExtent, graphicsPipeline);
+    auto vertexBuffer = Q::createVertexBuffer(device);
+    auto vertexBufferMemory = Q::getVertexBufferMemory(device, physicalDevice, vertexBuffer);
+    Q::allocateVertexBufferMemory(device, vertexBufferMemory, vertexBuffer);
+    auto commandBuffers = Q::createCommandBuffers(
+        device, framebuffers, commandPool, renderPass, swapchainSurfaceExtent,
+        graphicsPipeline, vertexBuffer);
 
     auto physicalDeviceQueueFamilyOptionalIndices =
         Q::getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice,
@@ -807,7 +890,7 @@ int main(int argc, char **argv) {
             physicalDevice, *surface.get(), swapchainImages,
             swapchainSurfaceFormat, renderPass, swapchainSurfaceExtent,
             commandBuffers, commandPool, swapchainSurfaceExtent,
-            graphicsPipeline);
+            graphicsPipeline, vertexBuffer);
       }
 
       currentFrame = (currentFrame + 1) % maxFramesInFlight;
