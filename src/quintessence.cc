@@ -12,7 +12,6 @@
 #include <vulkan/vulkan.hpp>
 
 namespace Q {
-
 template <class TClass> class Singleton {
 public:
   Singleton(const Singleton &) = delete;
@@ -300,6 +299,108 @@ vk::UniqueDevice createDevice(const vk::PhysicalDevice &physicalDevice,
   return physicalDevice.createDeviceUnique(deviceCreateInfo);
 }
 
+vk::SurfaceFormatKHR
+selectSurfaceFormat(std::vector<vk::SurfaceFormatKHR> &surfaceFormats) {
+  if (surfaceFormats.size() == 1 &&
+      surfaceFormats[0].format == vk::Format::eUndefined) {
+    return {vk::Format::eB8G8R8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear};
+  }
+
+  for (const auto &surfaceFormat : surfaceFormats) {
+    if (surfaceFormat.format == vk::Format::eB8G8R8A8Unorm &&
+        surfaceFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+      return surfaceFormat;
+  }
+
+  return surfaceFormats[0];
+}
+
+vk::PresentModeKHR
+selectSurfacePresentMode(std::vector<vk::PresentModeKHR> &presentModes) {
+  auto bestMode = vk::PresentModeKHR::eFifo;
+
+  for (const auto &presentMode : presentModes) {
+    if (presentMode == vk::PresentModeKHR::eMailbox)
+      return presentMode;
+    else if (presentMode == vk::PresentModeKHR::eImmediate)
+      bestMode = presentMode;
+  }
+
+  return bestMode;
+}
+
+vk::Extent2D
+selectSurfaceExtent(const vk::SurfaceCapabilitiesKHR &surfaceCapabilities) {
+  if (surfaceCapabilities.currentExtent.width !=
+      std::numeric_limits<uint32_t>::max())
+    return surfaceCapabilities.currentExtent;
+  else {
+    vk::Extent2D actualExtent = {static_cast<uint32_t>(512),
+                                 static_cast<uint32_t>(512)};
+
+    actualExtent.width = std::max(
+        surfaceCapabilities.minImageExtent.width,
+        std::min(surfaceCapabilities.maxImageExtent.width, actualExtent.width));
+    actualExtent.height =
+        std::max(surfaceCapabilities.minImageExtent.height,
+                 std::min(surfaceCapabilities.maxImageExtent.height,
+                          actualExtent.height));
+
+    return actualExtent;
+  }
+}
+
+vk::UniqueSwapchainKHR createSwapchain(vk::UniqueDevice &device,
+                                       const vk::PhysicalDevice physicalDevice,
+                                       const vk::SurfaceKHR &surface) {
+  auto surfaceFormats = physicalDevice.getSurfaceFormatsKHR(surface);
+  const auto surfaceFormat = selectSurfaceFormat(surfaceFormats);
+  auto surfacePresentModes = physicalDevice.getSurfacePresentModesKHR(surface);
+  const auto surfacePresentMode = selectSurfacePresentMode(surfacePresentModes);
+  const auto surfaceCapabilities =
+      physicalDevice.getSurfaceCapabilitiesKHR(surface);
+  const auto surfaceExtent = selectSurfaceExtent(surfaceCapabilities);
+
+  auto minImageCount = surfaceCapabilities.minImageCount + 1;
+  if (surfaceCapabilities.maxImageCount > 0 &&
+      minImageCount > surfaceCapabilities.maxImageCount)
+    minImageCount = surfaceCapabilities.maxImageCount;
+
+  auto imageSharingMode = vk::SharingMode::eExclusive;
+  uint32_t queueFamilyIndexCount = 0;
+  uint32_t queueFamilyIndices[2];
+
+  if (const auto physicalDeviceQueueFamilyOptionalIndices =
+          getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice, surface);
+      physicalDeviceQueueFamilyOptionalIndices[0] !=
+      physicalDeviceQueueFamilyOptionalIndices[1]) {
+    imageSharingMode = vk::SharingMode::eConcurrent;
+    queueFamilyIndexCount = 2;
+    queueFamilyIndices[0] = physicalDeviceQueueFamilyOptionalIndices[0].value();
+    queueFamilyIndices[1] = physicalDeviceQueueFamilyOptionalIndices[1].value();
+  }
+
+  const vk::SwapchainCreateInfoKHR swapchainCreateInfo{
+      vk::SwapchainCreateFlagsKHR{},
+      surface,
+      minImageCount,
+      surfaceFormat.format,
+      surfaceFormat.colorSpace,
+      surfaceExtent,
+      1,
+      vk::ImageUsageFlagBits::eColorAttachment,
+      imageSharingMode,
+      queueFamilyIndexCount,
+      queueFamilyIndices,
+      surfaceCapabilities.currentTransform,
+      vk::CompositeAlphaFlagBitsKHR::eOpaque,
+      surfacePresentMode,
+      vk::True,
+      vk::SwapchainKHR{nullptr}};
+
+  return device->createSwapchainKHRUnique(swapchainCreateInfo);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
@@ -339,6 +440,7 @@ int main(int argc, char **argv) {
 
     const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
     auto device = Q::createDevice(physicalDevice, *surface.get());
+    auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get());
 
     glfwPollEvents();
 
