@@ -571,6 +571,29 @@ vk::UniquePipeline createGraphicsPipeline(
       .value;
 }
 
+std::vector<vk::UniqueFramebuffer> createFramebuffers(
+    vk::UniqueDevice &device, std::vector<vk::UniqueImageView> &imageViews,
+    vk::UniqueRenderPass &renderPass, const vk::Extent2D &swapchainExtent) {
+  std::vector<vk::UniqueFramebuffer> swapchainFramebuffers;
+  swapchainFramebuffers.resize(imageViews.size());
+
+  for (auto &imageView : imageViews) {
+    vk::ImageView attachments[] = {*imageView};
+    vk::FramebufferCreateInfo framebufferCreateInfo{
+        vk::FramebufferCreateFlags{},
+        *renderPass,
+        1,
+        attachments,
+        swapchainExtent.width,
+        swapchainExtent.height,
+        1};
+    swapchainFramebuffers.emplace_back(
+        device->createFramebufferUnique(framebufferCreateInfo));
+  }
+
+  return std::move(swapchainFramebuffers);
+}
+
 } // namespace Q
 
 int main(int argc, char **argv) {
@@ -622,6 +645,8 @@ int main(int argc, char **argv) {
     auto pipelineLayout = Q::createPipelineLayout(device);
     auto graphicsPipeline = Q::createGraphicsPipeline(
         device, renderPass, pipelineLayout, swapchainSurfaceExtent);
+    auto framebuffers = Q::createFramebuffers(
+        device, swapchainImageViews, renderPass, swapchainSurfaceExtent);
 
     glfwPollEvents();
   } catch (const std::exception &exception) {
