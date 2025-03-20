@@ -1,6 +1,7 @@
 #include <concepts>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -441,7 +442,10 @@ vk::UniqueRenderPass createRenderPass(const vk::UniqueDevice &device,
       0, vk::ImageLayout::eColorAttachmentOptimal};
 
   vk::SubpassDescription subpassDescription{vk::SubpassDescriptionFlags{},
-                                            vk::PipelineBindPoint::eGraphics, 1,
+                                            vk::PipelineBindPoint::eGraphics,
+                                            0,
+                                            nullptr,
+                                            1,
                                             &attachmentReference};
 
   vk::SubpassDependency subpassDependency{
@@ -458,6 +462,113 @@ vk::UniqueRenderPass createRenderPass(const vk::UniqueDevice &device,
       &subpassDescription,         1, &subpassDependency};
 
   return device->createRenderPassUnique(renderPassCreateInfo);
+}
+
+std::vector<char> readFile(const std::string &filePath) {
+  std::ifstream file(filePath, std::ios::ate | std::ios::binary);
+  if (!file.is_open())
+    throw std::runtime_error("Could not open file " + filePath);
+
+  const std::streamsize fileSize = static_cast<std::streamsize>(file.tellg());
+  std::vector<char> buffer(fileSize);
+  file.seekg(0);
+  file.read(buffer.data(), fileSize);
+  file.close();
+  return buffer;
+}
+
+vk::UniqueShaderModule createShaderModule(const vk::UniqueDevice &device,
+                                          const std::vector<char> &code) {
+  return device->createShaderModuleUnique(
+      {vk::ShaderModuleCreateFlags(), code.size(),
+       reinterpret_cast<const uint32_t *>(code.data())});
+}
+
+vk::UniquePipelineLayout createPipelineLayout(const vk::UniqueDevice &device) {
+  constexpr vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo{
+      vk::PipelineLayoutCreateFlags{}, 0, nullptr, 0, nullptr};
+  return device->createPipelineLayoutUnique(pipelineLayoutCreateInfo);
+}
+
+vk::UniquePipeline createGraphicsPipeline(
+    const vk::UniqueDevice &device, vk::UniqueRenderPass &renderPass,
+    vk::UniquePipelineLayout &pipelineLayout, vk::Extent2D &swapchainExtent) {
+  auto vertexShaderCode = readFile("assets/shaders/vertex.spv");
+  auto fragmentShaderCode = readFile("assets/shaders/fragment.spv");
+  auto vertexShaderModule = createShaderModule(device, vertexShaderCode);
+  auto fragmentShaderModule = createShaderModule(device, fragmentShaderCode);
+  vk::PipelineShaderStageCreateInfo pipelineShaderStageCreateInfos[] = {
+      {vk::PipelineShaderStageCreateFlags{}, vk::ShaderStageFlagBits::eVertex,
+       *vertexShaderModule, "main"},
+      {vk::PipelineShaderStageCreateFlags{}, vk::ShaderStageFlagBits::eFragment,
+       *fragmentShaderModule, "main"}};
+  vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo{
+      vk::PipelineVertexInputStateCreateFlags{}, 0, nullptr, 0, nullptr};
+  vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo{
+      vk::PipelineInputAssemblyStateCreateFlags{},
+      vk::PrimitiveTopology::eTriangleList, vk::False};
+  vk::Viewport viewport{0,
+                        0,
+                        static_cast<float>(swapchainExtent.width),
+                        static_cast<float>(swapchainExtent.height),
+                        0,
+                        1};
+  vk::Rect2D scissor{vk::Offset2D{0, 0}, swapchainExtent};
+  vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo{
+      vk::PipelineViewportStateCreateFlags{}, 1, &viewport, 1, &scissor};
+  vk::PipelineRasterizationStateCreateInfo pipelineRasterizationStateCreateInfo{
+      vk::PipelineRasterizationStateCreateFlags{},
+      vk::False,
+      vk::False,
+      vk::PolygonMode::eFill,
+      vk::CullModeFlagBits::eBack,
+      vk::FrontFace::eClockwise,
+      vk::False,
+      {},
+      {},
+      {},
+      1};
+  vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo{
+      vk::PipelineMultisampleStateCreateFlags{}, vk::SampleCountFlagBits::e1,
+      vk::False};
+  vk::PipelineColorBlendAttachmentState colorBlendAttachmentState{
+      vk::False,
+      vk::BlendFactor::eZero,
+      vk::BlendFactor::eZero,
+      vk::BlendOp::eAdd,
+      vk::BlendFactor::eZero,
+      vk::BlendFactor::eZero,
+      vk::BlendOp::eAdd,
+      vk::ColorComponentFlags{
+          vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA}};
+  vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo{
+      vk::PipelineColorBlendStateCreateFlags{},
+      vk::False,
+      vk::LogicOp::eCopy,
+      1,
+      &colorBlendAttachmentState,
+      std::array<float, 4>{0, 0, 0, 0}};
+  vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo{
+      vk::PipelineCreateFlags{},
+      2,
+      pipelineShaderStageCreateInfos,
+      &pipelineVertexInputStateCreateInfo,
+      &pipelineInputAssemblyStateCreateInfo,
+      nullptr,
+      &pipelineViewportStateCreateInfo,
+      &pipelineRasterizationStateCreateInfo,
+      &pipelineMultisampleStateCreateInfo,
+      nullptr,
+      &pipelineColorBlendStateCreateInfo,
+      nullptr,
+      *pipelineLayout,
+      *renderPass,
+      0,
+      nullptr};
+  return device
+      ->createGraphicsPipelineUnique(nullptr, graphicsPipelineCreateInfo)
+      .value;
 }
 
 } // namespace Q
@@ -500,14 +611,17 @@ int main(int argc, char **argv) {
     const auto physicalDevice = Q::pickPhysicalDevice(instance, *surface.get());
     auto device = Q::createDevice(physicalDevice, *surface.get());
     auto swapchain = Q::createSwapchain(device, physicalDevice, *surface.get());
-    auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
+    const auto swapchainImages = device->getSwapchainImagesKHR(*swapchain);
     const auto swapchainSurfaceFormat =
         Q::getSurfaceFormat(physicalDevice, *surface.get()).format;
-    const auto swapchainSurfaceExtent = Q::selectSurfaceExtent(
+    auto swapchainSurfaceExtent = Q::selectSurfaceExtent(
         physicalDevice.getSurfaceCapabilitiesKHR(*surface.get()));
     auto swapchainImageViews = Q::getSwapchainImageViews(
         device, swapchainImages, swapchainSurfaceFormat);
     auto renderPass = Q::createRenderPass(device, swapchainSurfaceFormat);
+    auto pipelineLayout = Q::createPipelineLayout(device);
+    auto graphicsPipeline = Q::createGraphicsPipeline(
+        device, renderPass, pipelineLayout, swapchainSurfaceExtent);
 
     glfwPollEvents();
   } catch (const std::exception &exception) {

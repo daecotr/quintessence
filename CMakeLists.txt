@@ -13,6 +13,35 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GLFW REQUIRED glfw3)
 find_package(glm REQUIRED)
 
+set(ASSETS_DIR "assets")
+set(SHADERS_DIR "${ASSETS_DIR}/shaders")
+
+find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR})
+
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/vertex.spv
+  COMMAND ${GLSLANG_VALIDATOR} -V
+  ${CMAKE_CURRENT_SOURCE_DIR}/shaders/main.vert
+  -o ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/vertex.spv
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/main.vert
+)
+
+add_custom_command(
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/fragment.spv
+  COMMAND ${GLSLANG_VALIDATOR} -V
+  ${CMAKE_CURRENT_SOURCE_DIR}/shaders/main.frag
+  -o ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/fragment.spv
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shaders/main.frag
+)
+
+add_custom_target(
+  compile_shaders ALL
+  DEPENDS
+  ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/vertex.spv
+  ${CMAKE_CURRENT_BINARY_DIR}/${SHADERS_DIR}/fragment.spv
+)
+
 add_executable(${PROJECT_NAME}
   src/quintessence.cc
 )
@@ -29,3 +58,5 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   ${Vulkan_LIBRARIES}
   ${glm_LIBRARIES}
 )
+
+add_dependencies(${PROJECT_NAME} compile_shaders)
