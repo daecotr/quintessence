@@ -617,14 +617,16 @@ std::vector<vk::UniqueCommandBuffer> createCommandBuffers(
   commandBuffers =
       device->allocateCommandBuffersUnique(commandBufferAllocateInfo);
 
-  for (uint32_t i = 0; i < commandBuffers.size(); i++) {
+  for (uint32_t i = 0; i < commandBuffers.size(); ++i) {
     vk::CommandBufferBeginInfo commandBufferBeginInfo{
         vk::CommandBufferUsageFlagBits::eSimultaneousUse};
 
     commandBuffers[i]->begin(commandBufferBeginInfo);
 
     vk::ClearValue clearColor{std::array<float, 4>{0, 0, 0, 0}};
-    vk::RenderPassBeginInfo renderPassBeginInfo{*renderPass, *framebuffers[i], vk::Rect2D{vk::Offset2D{0, 0}, swapchainExtent}, 1, &clearColor};
+    vk::RenderPassBeginInfo renderPassBeginInfo{
+        *renderPass, *framebuffers[i],
+        vk::Rect2D{vk::Offset2D{0, 0}, swapchainExtent}, 1, &clearColor};
 
     commandBuffers[i]->beginRenderPass(renderPassBeginInfo,
                                        vk::SubpassContents::eInline);
@@ -697,7 +699,62 @@ int main(int argc, char **argv) {
         Q::createCommandBuffers(device, framebuffers, commandPool, renderPass,
                                 swapchainSurfaceExtent, graphicsPipeline);
 
-    glfwPollEvents();
+    auto physicalDeviceQueueFamilyOptionalIndices =
+        Q::getPhysicalDeviceQueueFamilyOptionalIndices(physicalDevice,
+                                                       *surface.get());
+    auto graphicsQueue = device->getQueue(
+        physicalDeviceQueueFamilyOptionalIndices[0].value(), 0);
+    auto presentQueue = device->getQueue(
+        physicalDeviceQueueFamilyOptionalIndices[1].value(), 0);
+
+    constexpr auto maxFramesInFlight = 2;
+    std::vector<vk::UniqueSemaphore> imageAvailableSemaphores{};
+    imageAvailableSemaphores.reserve(maxFramesInFlight);
+    std::vector<vk::UniqueSemaphore> renderFinishedSemaphores{};
+    renderFinishedSemaphores.reserve(maxFramesInFlight);
+    std::vector<vk::UniqueFence> inFlightFences{};
+    inFlightFences.reserve(maxFramesInFlight);
+
+    for (size_t i = 0; i < maxFramesInFlight; ++i) {
+      imageAvailableSemaphores.emplace_back(device->createSemaphoreUnique({}));
+      renderFinishedSemaphores.emplace_back(device->createSemaphoreUnique({}));
+      inFlightFences.emplace_back(device->createFenceUnique({vk::FenceCreateFlagBits::eSignaled}));
+    }
+
+    uint32_t currentFrame = 0;
+    vk::Result result;
+    while (!glfwWindowShouldClose(window.get())) {
+      glfwPollEvents();
+      result =
+          device->waitForFences(1, &*inFlightFences[currentFrame], vk::True,
+                                std::numeric_limits<uint64_t>::max());
+       result = device->resetFences(1, &*inFlightFences[currentFrame]);
+       uint32_t imageIndex =
+           device
+               ->acquireNextImageKHR(
+                   *swapchain, std::numeric_limits<uint64_t>::max(),
+                   *imageAvailableSemaphores[currentFrame], nullptr)
+               .value;
+
+       vk::Semaphore waitSemaphores[] = {
+           *imageAvailableSemaphores[currentFrame]};
+       vk::PipelineStageFlags waitStages[] = {
+           vk::PipelineStageFlagBits::eColorAttachmentOutput};
+       vk::Semaphore signalSemaphores[] = {
+           *renderFinishedSemaphores[currentFrame]};
+       vk::SubmitInfo submitInfo{
+           1, waitSemaphores,  waitStages, 1, &*commandBuffers[imageIndex],
+           1, signalSemaphores};
+       graphicsQueue.submit(submitInfo, *inFlightFences[currentFrame]);
+
+       vk::SwapchainKHR swapchains[] = {*swapchain};
+       vk::PresentInfoKHR presentInfo{1,          signalSemaphores, 1,
+                                      swapchains, &imageIndex,      &result};
+       result = presentQueue.presentKHR(presentInfo);
+       currentFrame = (currentFrame + 1) % maxFramesInFlight;
+    }
+
+    device->waitIdle();
   } catch (const std::exception &exception) {
     std::cerr << exception.what() << std::endl;
     return EXIT_FAILURE;
