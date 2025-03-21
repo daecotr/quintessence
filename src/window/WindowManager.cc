@@ -4,6 +4,7 @@
 #include <GLFW/glfw3.h>
 
 #include "common/LogManager.hh"
+#include "window/WindowExceptions.hh"
 
 namespace Q {
 
@@ -16,7 +17,7 @@ WindowManager::WindowManager() {
   });
 
   if (!glfwInit())
-    throw std::runtime_error{"Failed to initialize GLFW"};
+    throw WindowException{"Failed to initialize GLFW"};
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);

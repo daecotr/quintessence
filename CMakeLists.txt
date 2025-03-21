@@ -32,6 +32,7 @@ add_executable(${PROJECT_NAME}
   include/window/Window.hh
   src/window/WindowManager.cc
   include/window/WindowManager.hh
+  include/window/WindowExceptions.hh
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

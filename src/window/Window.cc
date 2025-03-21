@@ -2,6 +2,7 @@
 
 #include "common/LogManager.hh"
 #include "window/WindowManager.hh"
+#include "window/WindowExceptions.hh"
 
 namespace Q {
 
@@ -17,7 +18,7 @@ Window::UniqueWindow Window::create(const int width, const int height,
       glfwCreateWindow(width, height, title, nullptr, nullptr);
   LogManager::getInstance().write(LogLevel::debug, "Window creating...");
   if (!rawWindow)
-    throw std::runtime_error{"Failed to create window"};
+    throw WindowCreationFailedException{"Failed to create window"};
   return {rawWindow, &Window::destroy};
 }
 
