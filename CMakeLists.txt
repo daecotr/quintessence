@@ -19,6 +19,7 @@ set(glfw3_LIBRARIES glfw)
 
 add_executable(${PROJECT_NAME}
   src/quintessence.cc
+  src/common/Exception.cc
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
