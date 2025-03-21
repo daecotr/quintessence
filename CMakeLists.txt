@@ -28,6 +28,10 @@ add_executable(${PROJECT_NAME}
   src/common/TerminalLogger.cc
   include/common/TerminalLogger.hh
   include/common/Config.hh
+  src/window/Window.cc
+  include/window/Window.hh
+  src/window/WindowManager.cc
+  include/window/WindowManager.hh
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
