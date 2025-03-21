@@ -19,7 +19,15 @@ set(glfw3_LIBRARIES glfw)
 
 add_executable(${PROJECT_NAME}
   src/quintessence.cc
+  include/common/Singleton.hh
+  include/common/ILogger.hh
+  include/common/Exception.hh
   src/common/Exception.cc
+  include/common/LogManager.hh
+  src/common/LogManager.cc
+  src/common/TerminalLogger.cc
+  include/common/TerminalLogger.hh
+  include/common/Config.hh
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
